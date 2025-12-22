@@ -12,7 +12,7 @@ class MicroAgent(dspy.Module):
     The "agent framework": ~100 LOC.
     Plan -> (optional) tool -> observe -> loop -> finalize.
     """
-    def __init__(self, max_steps: int = 6, use_tool_calls: bool | None = None):
+    def __init__(self, max_steps: int = 6, use_tool_calls: bool | None = None, use_global_trace: bool | None = None):
         super().__init__()
         # Use LM directly for robust JSON handling across providers.
         self.lm = dspy.settings.lm
@@ -20,6 +20,11 @@ class MicroAgent(dspy.Module):
         self._tool_list = [t.spec() for t in TOOLS.values()]
         self.max_steps = max_steps
         self._provider = self._infer_provider(self.lm)
+        if isinstance(use_global_trace, bool):
+            self._use_global_trace = use_global_trace
+        else:
+            env_gt = os.getenv("MICRO_AGENT_USE_GLOBAL_TRACE")
+            self._use_global_trace = env_gt.strip().lower() not in {"0", "false", "no", "off"} if env_gt else True
         # Determine function-calls mode
         env_override = os.getenv("USE_TOOL_CALLS")
         if isinstance(use_tool_calls, bool):
@@ -205,17 +210,18 @@ class MicroAgent(dspy.Module):
             in_tok = 0
             out_tok = 0
             cost = 0.0
-            try:
-                for _, _, out in dspy.settings.trace[-1:]:
-                    usage = getattr(out, "usage", None) or {}
-                    nonlocal total_cost, total_in_tokens, total_out_tokens
-                    c = getattr(out, "cost", None)
-                    if c is not None:
-                        cost += float(c or 0)
-                    in_tok += int(usage.get("input_tokens", 0) or 0)
-                    out_tok += int(usage.get("output_tokens", 0) or 0)
-            except Exception:
-                pass
+            if self._use_global_trace:
+                try:
+                    for _, _, out in dspy.settings.trace[-1:]:
+                        usage = getattr(out, "usage", None) or {}
+                        nonlocal total_cost, total_in_tokens, total_out_tokens
+                        c = getattr(out, "cost", None)
+                        if c is not None:
+                            cost += float(c or 0)
+                        in_tok += int(usage.get("input_tokens", 0) or 0)
+                        out_tok += int(usage.get("output_tokens", 0) or 0)
+                except Exception:
+                    pass
             if in_tok or out_tok or cost:
                 total_cost += cost
                 total_in_tokens += in_tok

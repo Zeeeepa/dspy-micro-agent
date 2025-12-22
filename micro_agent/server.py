@@ -1,7 +1,6 @@
 from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.encoders import jsonable_encoder
 import os, json, re
 from threading import Lock
 from pydantic import BaseModel
@@ -9,14 +8,21 @@ from .costs import estimate_prediction_cost
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 from .config import configure_lm
 from .agent import MicroAgent
-from .runtime import dump_trace, new_trace_id
+from .runtime import dump_trace, new_trace_id, to_jsonable
 from .logging_setup import setup_logging
 
 app = FastAPI(title="DSPy Micro Agent")
+origins_env = os.getenv("MICRO_AGENT_CORS_ORIGINS", "*").strip()
+if origins_env == "*":
+    allow_origins = ["*"]
+    allow_credentials = False
+else:
+    allow_origins = [o.strip() for o in origins_env.split(",") if o.strip()]
+    allow_credentials = os.getenv("MICRO_AGENT_CORS_CREDENTIALS", "0").strip().lower() in {"1", "true", "yes", "on"}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -63,7 +69,9 @@ def ask(req: AskRequest):
         raise HTTPException(status_code=400, detail="max_steps must be between 1 and 20")
 
     def _call_agent():
-        agent = _agent if req.use_tool_calls is None and req.max_steps == _agent.max_steps else MicroAgent(max_steps=req.max_steps, use_tool_calls=req.use_tool_calls)
+        if _serialize and req.use_tool_calls is None and req.max_steps == _agent.max_steps:
+            return _agent(question)
+        agent = MicroAgent(max_steps=req.max_steps, use_tool_calls=req.use_tool_calls, use_global_trace=_serialize)
         return agent(question)
 
     if _serialize:
@@ -76,7 +84,7 @@ def ask(req: AskRequest):
     usage = getattr(pred, "usage", {}) or {}
     est = estimate_prediction_cost(question, pred.trace, pred.answer, usage)
     path = dump_trace(trace_id, question, pred.trace, pred.answer, usage=usage, cost_usd=est.get("cost_usd"))
-    steps = jsonable_encoder(pred.trace)
+    steps = to_jsonable(pred.trace)
     return AskResponse(answer=pred.answer, trace_id=trace_id, trace_path=path, steps=steps, usage=usage, cost_usd=est.get("cost_usd"))
 
 @app.get("/trace/{trace_id}")

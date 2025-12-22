@@ -13,6 +13,13 @@ os.makedirs(TRACES_DIR, exist_ok=True)
 def _get_traces_dir() -> str:
     return os.getenv("TRACES_DIR", TRACES_DIR)
 
+def to_jsonable(obj: Any) -> Any:
+    """Coerce arbitrary objects to JSON-serializable structures."""
+    try:
+        return json.loads(json.dumps(obj, ensure_ascii=False, default=str))
+    except Exception:
+        return str(obj)
+
 class Step(TypedDict):
     tool: str
     args: Dict[str, Any]
@@ -44,9 +51,10 @@ def dump_trace(trace_id: str, question: str, steps: List[Step], answer: str, *, 
         rec["cost_usd"] = float(cost_usd)
     traces_dir = _get_traces_dir()
     os.makedirs(traces_dir, exist_ok=True)
+    rec_jsonable = to_jsonable(rec)
     path = os.path.join(traces_dir, f"{trace_id}.jsonl")
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        f.write(json.dumps(rec_jsonable, ensure_ascii=False) + "\n")
     return path
 
 def extract_json_block(text: str) -> str:

@@ -46,6 +46,7 @@ def test_dump_trace_serializes_non_json(tmp_path, monkeypatch):
     with open(path, "r", encoding="utf-8") as f:
         rec = json.loads(f.readline())
     assert rec["steps"][0]["observation"]["when"].startswith("2020-01-01")
+    assert rec["steps"] == runtime.to_jsonable(steps)
 
 
 def test_result_magnitude_limit():
