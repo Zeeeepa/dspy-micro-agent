@@ -66,3 +66,21 @@ def test_now_local_has_offset():
 def test_now_invalid_timezone_validation():
     obs = run_tool("now", {"timezone": "pst"})
     assert "error" in obs and "validation" in obs["error"]
+
+
+def test_date_like_not_math(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    configure_lm()
+    agent = MicroAgent(max_steps=3)
+    pred = agent("What's the date 2025-12-22 in UTC?")
+    assert any(step.get("tool") == "now" for step in (pred.trace or []))
+    assert not any(step.get("tool") == "calculator" for step in (pred.trace or []))
+
+
+def test_math_with_date_still_math(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    configure_lm()
+    agent = MicroAgent(max_steps=3)
+    pred = agent("Add 2 and 2 on 2025-12-22.")
+    assert any(step.get("tool") == "calculator" for step in (pred.trace or []))
+    assert "4" in pred.answer

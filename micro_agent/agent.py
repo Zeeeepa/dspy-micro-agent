@@ -163,10 +163,17 @@ class MicroAgent(dspy.Module):
                 .replace("\u2014", "-")
             )
 
+        def _strip_date_literals(q: str) -> str:
+            # Remove common date patterns to avoid misclassifying as math (e.g., 2025-12-22).
+            q = re.sub(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", " DATE ", q)
+            q = re.sub(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", " DATE ", q)
+            return q
+
         def needs_math(q: str) -> bool:
             qn = _normalize_text(q)
+            qn_math = _strip_date_literals(qn)
             ql = qn.lower()
-            if re.search(r"[0-9].*[+\-*/%]", qn):
+            if re.search(r"[0-9].*[+\-*/%]", qn_math):
                 return True
             if re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by)\s*\d+(?:\.\d+)?\b", ql):
                 return True
@@ -232,7 +239,7 @@ class MicroAgent(dspy.Module):
                 pass
 
         def _infer_expression(q: str) -> str:
-            qn = _normalize_text(q)
+            qn = _strip_date_literals(_normalize_text(q))
             ql = qn.lower()
             # Handle "divide X by Y" and "subtract X from Y"
             m = re.search(r"\bdivide\s+(\d+(?:\.\d+)?)\s+by\s+(\d+(?:\.\d+)?)\b", ql)

@@ -31,17 +31,23 @@ def configure_lm():
             model = "mock/local"
             def __call__(self, *, prompt: str, **kwargs):
                 import re, json as _json
-                qmatch = re.search(r"Question:\s*(.*)", prompt, re.S)
-                question = qmatch.group(1).strip() if qmatch else prompt
+                qmatch = re.search(r"\nQuestion:\s*(.*?)\n\nState:", prompt, re.S)
+                if qmatch:
+                    question = qmatch.group(1).strip()
+                else:
+                    qs = re.findall(r"\bQuestion:\s*(.*)", prompt)
+                    question = qs[-1].strip() if qs else prompt
                 qn = (question
                       .replace("\u00d7", "x")
                       .replace("\u00f7", "/")
                       .replace("\u2212", "-")
                       .replace("\u2013", "-")
                       .replace("\u2014", "-"))
+                qn_math = re.sub(r"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", " DATE ", qn)
+                qn_math = re.sub(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", " DATE ", qn_math)
                 ql = qn.lower()
                 # heuristic: suggest calculator/now/final
-                if (re.search(r"[0-9].*[+\-*/%]", qn) or
+                if (re.search(r"[0-9].*[+\-*/%]", qn_math) or
                     re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by|plus|minus|add|added to|subtract|subtracted by|divide|divided by|over)\s*\d+(?:\.\d+)?\b", ql) or
                     (re.search(r"\d", ql) and any(w in ql for w in [
                         "add","sum","plus","minus","subtract","multiply","divide","total","power","factorial","compute","calculate","!","**","^"
@@ -62,9 +68,13 @@ def configure_lm():
                         m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:divide|divided by|over)\s*(\d+(?:\.\d+)?)\b", ql)
                         if m:
                             expr = f"{m.group(1)}/{m.group(2)}"
+                    if expr is None and ("add" in ql or "sum" in ql):
+                        nums = re.findall(r"\b\d+(?:\.\d+)?\b", qn_math)
+                        if len(nums) >= 2:
+                            expr = "+".join(nums)
                     # crude expression extraction fallback
                     if expr is None:
-                        cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", qn)
+                        cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", qn_math)
                         cands = [c.strip() for c in cands if c.strip()]
                         expr = max(cands, key=len) if cands else "2+2"
                     return _json.dumps({"tool": {"name": "calculator", "args": {"expression": expr}}})
