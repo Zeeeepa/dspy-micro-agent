@@ -35,16 +35,35 @@ def configure_lm():
                 question = qmatch.group(1).strip() if qmatch else prompt
                 ql = question.lower()
                 # heuristic: suggest calculator/now/final
-                if re.search(r"[0-9].*[+\-*/]", question) or any(w in ql for w in [
-                    "add","sum","multiply","divide","compute","calculate","total","power","factorial","!","**","^"
-                ]):
-                    # crude expression extraction
-                    cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", question)
-                    cands = [c.strip() for c in cands if c.strip()]
-                    expr = max(cands, key=len) if cands else "2+2"
+                if (re.search(r"[0-9].*[+\-*/%]", question) or
+                    re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by|plus|minus|add|added to|subtract|subtracted by|divide|divided by|over)\s*\d+(?:\.\d+)?\b", ql) or
+                    (re.search(r"\d", ql) and any(w in ql for w in [
+                        "add","sum","plus","minus","subtract","multiply","divide","total","power","factorial","compute","calculate","!","**","^"
+                    ]))):
+                    expr = None
+                    m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:x|times|multiplied by)\s*(\d+(?:\.\d+)?)\b", ql)
+                    if m:
+                        expr = f"{m.group(1)}*{m.group(2)}"
+                    if expr is None:
+                        m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:plus|add|added to)\s*(\d+(?:\.\d+)?)\b", ql)
+                        if m:
+                            expr = f"{m.group(1)}+{m.group(2)}"
+                    if expr is None:
+                        m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:minus|subtract|subtracted by)\s*(\d+(?:\.\d+)?)\b", ql)
+                        if m:
+                            expr = f"{m.group(1)}-{m.group(2)}"
+                    if expr is None:
+                        m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:divide|divided by|over)\s*(\d+(?:\.\d+)?)\b", ql)
+                        if m:
+                            expr = f"{m.group(1)}/{m.group(2)}"
+                    # crude expression extraction fallback
+                    if expr is None:
+                        cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", question)
+                        cands = [c.strip() for c in cands if c.strip()]
+                        expr = max(cands, key=len) if cands else "2+2"
                     return _json.dumps({"tool": {"name": "calculator", "args": {"expression": expr}}})
                 if ("current time" in ql or "current date" in ql or
-                    re.search(r"\b(time|times|date|dates|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql)):
+                    re.search(r"\b(time|date|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql)):
                     return _json.dumps({"tool": {"name": "now", "args": {"timezone": "utc"}}})
                 return _json.dumps({"final": {"answer": "ok"}})
         dspy.settings.configure(lm=_MockLM(), track_usage=True)

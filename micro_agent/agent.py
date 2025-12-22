@@ -156,9 +156,16 @@ class MicroAgent(dspy.Module):
 
         def needs_math(q: str) -> bool:
             ql = q.lower()
-            if re.search(r"[0-9].*[+\-*/]", q):
+            if re.search(r"[0-9].*[+\-*/%]", q):
                 return True
-            if any(w in ql for w in ["add", "sum", "multiply", "divide", "compute", "calculate", "total", "power", "factorial", "!", "**", "^"]):
+            if re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by)\s*\d+(?:\.\d+)?\b", ql):
+                return True
+            if re.search(r"\b\d+(?:\.\d+)?\s*(?:plus|minus|add|added to|subtract|subtracted by|divide|divided by|over)\s*\d+(?:\.\d+)?\b", ql):
+                return True
+            if re.search(r"\d", ql) and any(w in ql for w in [
+                "add", "sum", "plus", "minus", "subtract", "multiply", "divide",
+                "total", "power", "factorial", "compute", "calculate"
+            ]):
                 return True
             return False
 
@@ -166,7 +173,7 @@ class MicroAgent(dspy.Module):
             ql = q.lower()
             if "current time" in ql or "current date" in ql:
                 return True
-            return re.search(r"\b(time|times|date|dates|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql) is not None
+            return re.search(r"\b(time|date|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql) is not None
 
         def used_tool(state, name: str) -> bool:
             return any(step.get("tool") == name for step in state)
@@ -178,17 +185,25 @@ class MicroAgent(dspy.Module):
 
         def _accumulate_usage(input_text: str = "", output_text: str = ""):
             # Pull new usage entries from dspy.settings.trace
+            in_tok = 0
+            out_tok = 0
+            cost = 0.0
             try:
                 for _, _, out in dspy.settings.trace[-1:]:
                     usage = getattr(out, "usage", None) or {}
                     nonlocal total_cost, total_in_tokens, total_out_tokens
                     c = getattr(out, "cost", None)
                     if c is not None:
-                        total_cost += float(c or 0)
-                    total_in_tokens += int(usage.get("input_tokens", 0) or 0)
-                    total_out_tokens += int(usage.get("output_tokens", 0) or 0)
+                        cost += float(c or 0)
+                    in_tok += int(usage.get("input_tokens", 0) or 0)
+                    out_tok += int(usage.get("output_tokens", 0) or 0)
             except Exception:
                 pass
+            if in_tok or out_tok or cost:
+                total_cost += cost
+                total_in_tokens += in_tok
+                total_out_tokens += out_tok
+                return
             # Heuristic fallback: estimate tokens from input/output texts and compute cost via env prices
             try:
                 if input_text:
@@ -205,6 +220,38 @@ class MicroAgent(dspy.Module):
                     total_cost += estimate_cost_usd(it, ot, getattr(self.lm, "model", ""), self._provider or "")
             except Exception:
                 pass
+
+        def _infer_expression(q: str) -> str:
+            ql = q.lower()
+            # Handle "divide X by Y" and "subtract X from Y"
+            m = re.search(r"\bdivide\s+(\d+(?:\.\d+)?)\s+by\s+(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(1)}/{m.group(2)}"
+            m = re.search(r"\bsubtract\s+(\d+(?:\.\d+)?)\s+from\s+(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(2)}-{m.group(1)}"
+            # Binary worded ops
+            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:x|times|multiplied by)\s*(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(1)}*{m.group(2)}"
+            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:plus|add|added to)\s*(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(1)}+{m.group(2)}"
+            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:minus|subtract|subtracted by)\s*(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(1)}-{m.group(2)}"
+            m = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:divide|divided by|over)\s*(\d+(?:\.\d+)?)\b", ql)
+            if m:
+                return f"{m.group(1)}/{m.group(2)}"
+            # Multi-number add/sum
+            if "add" in ql or "sum" in ql:
+                nums = [n for n in re.findall(r"\b\d+\b", q)]
+                if len(nums) >= 2:
+                    return "+".join(nums)
+            # Fallback: longest math-like substring
+            candidates = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", q)
+            candidates = [c.strip() for c in candidates if any(op in c for op in ["+","-","*","/","%","^","(",")","!"])]
+            return max(candidates, key=len) if candidates else ""
 
         # Path A: OpenAI-native tool calling using DSPy signatures/adapters.
         if self._use_tool_calls:
@@ -275,6 +322,13 @@ class MicroAgent(dspy.Module):
                 # Check finalization.
                 final = getattr(pred, 'final', None)
                 if final:
+                    if executed_any:
+                        state.append({
+                            "tool": "⛔️policy_violation",
+                            "args": {"reason": "tool_and_final"},
+                            "observation": "Model returned a final answer alongside a tool call.",
+                        })
+                        continue
                     if had_policy_violation or had_validation_error:
                         continue
                     if must_math and not used_tool(state, "calculator"):
@@ -319,29 +373,15 @@ class MicroAgent(dspy.Module):
             if calculators:
                 parts.append(str(calculators[0]["observation"].get("result")))
             elif must_math:
-                # Last-chance math: infer a simple expression from the question.
-                import re as _re
-                ql = question.lower()
-                if "add" in ql or "sum" in ql:
-                    nums = [int(n) for n in _re.findall(r"\b\d+\b", question)]
-                    if len(nums) >= 2:
-                        res = sum(nums)
+                expr = _infer_expression(question)
+                if expr:
+                    try:
+                        res = safe_eval_math(expr)
                         parts.append(str(res))
-                        # also record as a calculator step for trace parity
-                        state.append({"tool": "calculator", "args": {"expression": "+".join(map(str, nums))}, "observation": {"result": res}})
+                        state.append({"tool": "calculator", "args": {"expression": expr}, "observation": {"result": res}})
                         tool_calls += 1
-                if not parts:
-                    candidates = _re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", question)
-                    candidates = [c.strip() for c in candidates if any(op in c for op in ["+","-","*","/","%","^","(",")","!"])]
-                    expr = max(candidates, key=len) if candidates else ""
-                    if expr:
-                        try:
-                            res = safe_eval_math(expr)
-                            parts.append(str(res))
-                            state.append({"tool": "calculator", "args": {"expression": expr}, "observation": {"result": res}})
-                            tool_calls += 1
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
             if nows:
                 iso = nows[-1]["observation"].get("iso")
                 if iso:
@@ -413,6 +453,13 @@ class MicroAgent(dspy.Module):
                     continue
 
             if "final" in decision:
+                if "tool" in decision:
+                    state.append({
+                        "tool": "⛔️policy_violation",
+                        "args": {"reason": "tool_and_final"},
+                        "observation": "Decision contained both tool and final.",
+                    })
+                    continue
                 # Enforce tool usage policy: if required tools not yet used, keep planning.
                 if must_math and not used_tool(state, "calculator"):
                     state.append({"tool": "⛔️policy_violation", "args": {}, "observation": "Finalize attempted before calculator."})
@@ -430,7 +477,14 @@ class MicroAgent(dspy.Module):
                     iso = nows[-1]["observation"].get("iso")
                     if iso:
                         composed_parts.append(f"UTC: {iso}")
-                final_text = " | ".join(composed_parts) if composed_parts else decision["final"].get("answer", "")
+                if composed_parts:
+                    final_text = " | ".join(composed_parts)
+                else:
+                    final_payload = decision.get("final")
+                    if isinstance(final_payload, dict):
+                        final_text = final_payload.get("answer", "")
+                    else:
+                        final_text = str(final_payload) if final_payload is not None else ""
                 p = dspy.Prediction(answer=final_text, trace=state)
                 p.usage = {
                     "lm_calls": lm_calls,
@@ -478,24 +532,12 @@ class MicroAgent(dspy.Module):
                 if calc_results:
                     parts.append(str(calc_results[0]))
             if must_math and not parts:
-                # Last-chance math: try to infer a simple expression from the question.
-                ql = question.lower()
-                # If looks like 'add X and Y', sum integers.
-                import re
-                if "add" in ql or "sum" in ql:
-                    nums = [int(n) for n in re.findall(r"\b\d+\b", question)]
-                    if len(nums) >= 2:
-                        parts.append(str(sum(nums)))
-                if not parts:
-                    # Extract longest math-like substring and evaluate.
-                    candidates = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", question)
-                    candidates = [c.strip() for c in candidates if any(op in c for op in ["+","-","*","/","%","^","(",")","!"])]
-                    expr = max(candidates, key=len) if candidates else ""
-                    if expr:
-                        try:
-                            parts.append(str(safe_eval_math(expr)))
-                        except Exception:
-                            pass
+                expr = _infer_expression(question)
+                if expr:
+                    try:
+                        parts.append(str(safe_eval_math(expr)))
+                    except Exception:
+                        pass
             if nows:
                 iso = nows[-1]["observation"].get("iso")
                 if iso:

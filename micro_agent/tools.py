@@ -40,6 +40,10 @@ def _eval_expr(node):
         result = ALLOWED_OPS[type(node.op)](lv, rv)
         if isinstance(result, complex):
             raise ValueError("complex results are not supported")
+        if isinstance(result, float) and not math.isfinite(result):
+            raise ValueError("number not finite")
+        if isinstance(result, (int, float)) and abs(result) > MAX_ABS_NUMBER:
+            raise ValueError("number too large")
         return result
     if isinstance(node, ast.UnaryOp) and type(node.op) in ALLOWED_OPS:
         v = _eval_expr(node.operand)
@@ -47,6 +51,10 @@ def _eval_expr(node):
         result = ALLOWED_OPS[type(node.op)](v)
         if isinstance(result, complex):
             raise ValueError("complex results are not supported")
+        if isinstance(result, float) and not math.isfinite(result):
+            raise ValueError("number not finite")
+        if isinstance(result, (int, float)) and abs(result) > MAX_ABS_NUMBER:
+            raise ValueError("number too large")
         return result
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ALLOWED_CALLS:
         if len(node.args) != 1:
@@ -61,7 +69,10 @@ def _eval_expr(node):
             raise ValueError("factorial requires a non-negative integer")
         if arg_int > MAX_FACTORIAL_N:
             raise ValueError("factorial too large")
-        return ALLOWED_CALLS[node.func.id](arg_int)
+        result = ALLOWED_CALLS[node.func.id](arg_int)
+        if isinstance(result, (int, float)) and abs(result) > MAX_ABS_NUMBER:
+            raise ValueError("number too large")
+        return result
     if isinstance(node, ast.Expression): return _eval_expr(node.body)
     raise ValueError("Disallowed expression")
 

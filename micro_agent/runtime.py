@@ -39,9 +39,10 @@ def dump_trace(trace_id: str, question: str, steps: List[Step], answer: str, *, 
         rec["usage"] = usage
     if cost_usd is not None:
         rec["cost_usd"] = float(cost_usd)
+    os.makedirs(TRACES_DIR, exist_ok=True)
     path = os.path.join(TRACES_DIR, f"{trace_id}.jsonl")
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
     return path
 
 def extract_json_block(text: str) -> str:
@@ -90,7 +91,10 @@ def parse_decision_text(text: str) -> Dict[str, Any]:
     block = extract_json_block(text)
     # 1) strict json
     try:
-        return json.loads(block)
+        obj = json.loads(block)
+        if isinstance(obj, dict):
+            return obj
+        raise ValueError("Decision JSON is not an object")
     except Exception:
         pass
     # 2) json-repair (if available)
@@ -99,7 +103,10 @@ def parse_decision_text(text: str) -> Dict[str, Any]:
             repaired = json_repair.repair(block)
             if isinstance(repaired, dict):
                 return repaired
-            return json.loads(repaired)
+            obj = json.loads(repaired)
+            if isinstance(obj, dict):
+                return obj
+            raise ValueError("Decision JSON is not an object")
         except Exception:
             pass
     # 3) python literal (handles single quotes)
