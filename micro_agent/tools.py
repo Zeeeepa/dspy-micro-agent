@@ -29,7 +29,12 @@ ALLOWED_CALLS = {"fact": lambda x: math.factorial(int(x))}
 def _eval_expr(node):
     # Python 3.10+: numeric literals appear as ast.Constant
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
-        return node.value
+        v = node.value
+        if isinstance(v, float) and not math.isfinite(v):
+            raise ValueError("number not finite")
+        if abs(v) > MAX_ABS_NUMBER:
+            raise ValueError("number too large")
+        return v
     if isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPS:
         lv, rv = _eval_expr(node.left), _eval_expr(node.right)
         if isinstance(lv, (int, float)) and abs(lv) > MAX_ABS_NUMBER: raise ValueError("number too large")
@@ -80,6 +85,15 @@ def preprocess_math(expr: str) -> str:
     # Replace simple factorial forms like 9! or 12! with fact(9) / fact(12)
     expr = str(expr or "").strip()
     expr = re.sub(r"(\d+)\!", r"fact(\1)", expr)
+    # Normalize common unicode operators
+    expr = (
+        expr
+        .replace("\u00d7", "*")  # ×
+        .replace("\u00f7", "/")  # ÷
+        .replace("\u2212", "-")  # −
+        .replace("\u2013", "-")  # –
+        .replace("\u2014", "-")  # —
+    )
     # Replace caret ^ with exponentiation
     expr = expr.replace("^", "**")
     # Trim trailing punctuation that commonly slips from prose
@@ -103,7 +117,9 @@ def tool_calculator(args: Dict[str, Any]):
 
 def tool_now(args: Dict[str, Any]):
     tz = str(args.get("timezone", "local")).lower()
-    now = datetime.datetime.now(datetime.timezone.utc) if tz == "utc" else datetime.datetime.now()
+    if tz not in {"utc", "local"}:
+        raise ValueError("timezone must be 'utc' or 'local'")
+    now = datetime.datetime.now(datetime.timezone.utc) if tz == "utc" else datetime.datetime.now().astimezone()
     return {"iso": now.isoformat(timespec="seconds")}
 
 def _load_plugins():
@@ -130,13 +146,13 @@ TOOLS = {
     "calculator": Tool(
         "calculator",
         "Evaluate arithmetic expressions. Schema: {expression: string}. Supports +,-,*,/,**,%, //, parentheses.",
-        {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]},
+        {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"], "additionalProperties": False},
         tool_calculator
     ),
     "now": Tool(
         "now",
         "Return the current timestamp. Optional: {timezone: 'utc'|'local'}",
-        {"type": "object", "properties": {"timezone": {"type": "string"}}, "required": []},
+        {"type": "object", "properties": {"timezone": {"type": "string", "enum": ["utc", "local"]}}, "required": [], "additionalProperties": False},
         tool_now
     ),
 }

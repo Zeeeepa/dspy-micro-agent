@@ -33,9 +33,15 @@ def configure_lm():
                 import re, json as _json
                 qmatch = re.search(r"Question:\s*(.*)", prompt, re.S)
                 question = qmatch.group(1).strip() if qmatch else prompt
-                ql = question.lower()
+                qn = (question
+                      .replace("\u00d7", "x")
+                      .replace("\u00f7", "/")
+                      .replace("\u2212", "-")
+                      .replace("\u2013", "-")
+                      .replace("\u2014", "-"))
+                ql = qn.lower()
                 # heuristic: suggest calculator/now/final
-                if (re.search(r"[0-9].*[+\-*/%]", question) or
+                if (re.search(r"[0-9].*[+\-*/%]", qn) or
                     re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by|plus|minus|add|added to|subtract|subtracted by|divide|divided by|over)\s*\d+(?:\.\d+)?\b", ql) or
                     (re.search(r"\d", ql) and any(w in ql for w in [
                         "add","sum","plus","minus","subtract","multiply","divide","total","power","factorial","compute","calculate","!","**","^"
@@ -58,7 +64,7 @@ def configure_lm():
                             expr = f"{m.group(1)}/{m.group(2)}"
                     # crude expression extraction fallback
                     if expr is None:
-                        cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", question)
+                        cands = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", qn)
                         cands = [c.strip() for c in cands if c.strip()]
                         expr = max(cands, key=len) if cands else "2+2"
                     return _json.dumps({"tool": {"name": "calculator", "args": {"expression": expr}}})

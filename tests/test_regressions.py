@@ -1,11 +1,13 @@
 import datetime
 import json
+import re
 import pytest
 
 from micro_agent.config import configure_lm
 from micro_agent.agent import MicroAgent
 from micro_agent.tools import safe_eval_math
 from micro_agent import runtime
+from micro_agent.tools import run_tool
 
 
 def test_no_false_time_trigger_on_update(monkeypatch):
@@ -49,3 +51,18 @@ def test_dump_trace_serializes_non_json(tmp_path, monkeypatch):
 def test_result_magnitude_limit():
     with pytest.raises(ValueError):
         safe_eval_math("1000000*10000000")
+
+
+def test_unicode_multiply():
+    assert safe_eval_math("3\u00d74") == 12
+
+
+def test_now_local_has_offset():
+    obs = run_tool("now", {"timezone": "local"})
+    assert "iso" in obs
+    assert re.search(r"[+-]\d\d:\d\d$", obs["iso"])
+
+
+def test_now_invalid_timezone_validation():
+    obs = run_tool("now", {"timezone": "pst"})
+    assert "error" in obs and "validation" in obs["error"]

@@ -67,19 +67,29 @@ def estimate_cost_usd(input_tokens: int, output_tokens: int, model: str, provide
 def estimate_prediction_cost(question: str, trace: Any, answer: str, usage: Dict[str, Any]) -> Dict[str, Any]:
     """Estimate token usage and USD cost for a single prediction.
 
-    Heuristic: input tokens ~= lm_calls * tokens(question) + tokens(str(trace))
-               output tokens ~= tokens(answer)
+    If usage provides token counts, prefer them. Otherwise fall back to a heuristic:
+    input tokens ~= lm_calls * tokens(question) + tokens(str(trace))
+    output tokens ~= tokens(answer)
     """
-    provider = (usage or {}).get("provider") or "openai"
-    model = (usage or {}).get("model") or "gpt-4o-mini"
-    lm_calls = int((usage or {}).get("lm_calls", 0) or 0)
+    usage = usage or {}
+    provider = usage.get("provider") or "openai"
+    model = usage.get("model") or "gpt-4o-mini"
+    lm_calls = int(usage.get("lm_calls", 0) or 0)
 
-    q_tokens = estimate_tokens(str(question or ""), model)
-    trace_tokens = estimate_tokens(str(trace or ""), model)
-    ans_tokens = estimate_tokens(str(answer or ""), model)
-    in_tokens = lm_calls * q_tokens + trace_tokens
-    out_tokens = ans_tokens
-    cost = estimate_cost_usd(in_tokens, out_tokens, model=model, provider=provider)
+    in_tokens = int(usage.get("input_tokens", 0) or 0)
+    out_tokens = int(usage.get("output_tokens", 0) or 0)
+    if in_tokens == 0 and out_tokens == 0:
+        q_tokens = estimate_tokens(str(question or ""), model)
+        trace_tokens = estimate_tokens(str(trace or ""), model)
+        ans_tokens = estimate_tokens(str(answer or ""), model)
+        in_tokens = lm_calls * q_tokens + trace_tokens
+        out_tokens = ans_tokens
+
+    cost = usage.get("cost")
+    if cost is None or cost == 0:
+        cost = estimate_cost_usd(in_tokens, out_tokens, model=model, provider=provider)
+    else:
+        cost = float(cost)
     return {
         "input_tokens": in_tokens,
         "output_tokens": out_tokens,

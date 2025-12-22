@@ -154,9 +154,19 @@ class MicroAgent(dspy.Module):
         total_in_tokens = 0
         total_out_tokens = 0
 
+        def _normalize_text(q: str) -> str:
+            return (
+                q.replace("\u00d7", "x")
+                .replace("\u00f7", "/")
+                .replace("\u2212", "-")
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+            )
+
         def needs_math(q: str) -> bool:
-            ql = q.lower()
-            if re.search(r"[0-9].*[+\-*/%]", q):
+            qn = _normalize_text(q)
+            ql = qn.lower()
+            if re.search(r"[0-9].*[+\-*/%]", qn):
                 return True
             if re.search(r"\b\d+(?:\.\d+)?\s*(?:x|times|multiplied by)\s*\d+(?:\.\d+)?\b", ql):
                 return True
@@ -170,7 +180,7 @@ class MicroAgent(dspy.Module):
             return False
 
         def needs_time(q: str) -> bool:
-            ql = q.lower()
+            ql = _normalize_text(q).lower()
             if "current time" in ql or "current date" in ql:
                 return True
             return re.search(r"\b(time|date|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql) is not None
@@ -222,7 +232,8 @@ class MicroAgent(dspy.Module):
                 pass
 
         def _infer_expression(q: str) -> str:
-            ql = q.lower()
+            qn = _normalize_text(q)
+            ql = qn.lower()
             # Handle "divide X by Y" and "subtract X from Y"
             m = re.search(r"\bdivide\s+(\d+(?:\.\d+)?)\s+by\s+(\d+(?:\.\d+)?)\b", ql)
             if m:
@@ -245,11 +256,11 @@ class MicroAgent(dspy.Module):
                 return f"{m.group(1)}/{m.group(2)}"
             # Multi-number add/sum
             if "add" in ql or "sum" in ql:
-                nums = [n for n in re.findall(r"\b\d+\b", q)]
+                nums = [n for n in re.findall(r"\b\d+\b", qn)]
                 if len(nums) >= 2:
                     return "+".join(nums)
             # Fallback: longest math-like substring
-            candidates = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", q)
+            candidates = re.findall(r"[0-9\+\-\*/%\(\)\.!\^\s]+", qn)
             candidates = [c.strip() for c in candidates if any(op in c for op in ["+","-","*","/","%","^","(",")","!"])]
             return max(candidates, key=len) if candidates else ""
 
@@ -307,6 +318,14 @@ class MicroAgent(dspy.Module):
                             continue
                         # Validate/execute; on validation error, record and continue planning
                         obs = run_tool(name, args)
+                        if isinstance(obs, dict) and "error" in obs and obs.get("error", "").startswith("Unknown tool"):
+                            had_validation_error = True
+                            state.append({
+                                "tool": "⛔️validation_error",
+                                "args": {"name": name, "args": args},
+                                "observation": obs,
+                            })
+                            continue
                         if isinstance(obs, dict) and "error" in obs and "validation" in obs.get("error", ""):
                             had_validation_error = True
                             state.append({
@@ -506,6 +525,13 @@ class MicroAgent(dspy.Module):
                     name = str(tool_desc)
                     args = decision.get("args", {}) or {}
                 obs = run_tool(name, args)
+                if isinstance(obs, dict) and "error" in obs and obs.get("error", "").startswith("Unknown tool"):
+                    state.append({
+                        "tool": "⛔️validation_error",
+                        "args": {"name": name, "args": args},
+                        "observation": obs,
+                    })
+                    continue
                 if isinstance(obs, dict) and "error" in obs and "validation" in obs.get("error", ""):
                     # second-chance: record detailed schema hint in state and continue planning
                     schema = TOOLS.get(name).schema if name in TOOLS else {}
