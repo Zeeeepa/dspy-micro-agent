@@ -10,6 +10,9 @@ except Exception:
 TRACES_DIR = os.getenv("TRACES_DIR", "traces")
 os.makedirs(TRACES_DIR, exist_ok=True)
 
+def _get_traces_dir() -> str:
+    return os.getenv("TRACES_DIR", TRACES_DIR)
+
 class Step(TypedDict):
     tool: str
     args: Dict[str, Any]
@@ -39,8 +42,9 @@ def dump_trace(trace_id: str, question: str, steps: List[Step], answer: str, *, 
         rec["usage"] = usage
     if cost_usd is not None:
         rec["cost_usd"] = float(cost_usd)
-    os.makedirs(TRACES_DIR, exist_ok=True)
-    path = os.path.join(TRACES_DIR, f"{trace_id}.jsonl")
+    traces_dir = _get_traces_dir()
+    os.makedirs(traces_dir, exist_ok=True)
+    path = os.path.join(traces_dir, f"{trace_id}.jsonl")
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
     return path

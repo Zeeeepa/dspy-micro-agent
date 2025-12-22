@@ -39,7 +39,7 @@ def test_times_is_math_not_time(monkeypatch):
 
 
 def test_dump_trace_serializes_non_json(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "TRACES_DIR", str(tmp_path))
+    monkeypatch.setenv("TRACES_DIR", str(tmp_path))
     trace_id = runtime.new_trace_id()
     steps = [{"tool": "now", "args": {}, "observation": {"when": datetime.datetime(2020, 1, 1)}}]
     path = runtime.dump_trace(trace_id, "q", steps, "a")
