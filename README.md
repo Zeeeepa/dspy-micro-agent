@@ -39,7 +39,9 @@ pip install -e .
 - Optional tuning: `TEMPERATURE` (default `0.2`), `MAX_TOKENS` (default `1024`)
 - Tool plugins: `TOOLS_MODULES="your_pkg.tools,other_pkg.tools"` to load extra tools (see Tools below)
 - Traces location: `TRACES_DIR` (default `traces/`)
+- CORS (API): `MICRO_AGENT_CORS_ORIGINS` (default `*`), `MICRO_AGENT_CORS_CREDENTIALS` (default `0`)
 - Compiled demos (OpenAI planner): `COMPILED_DEMOS_PATH` (default `opt/plan_demos.json`)
+- Concurrency/usage isolation: `MICRO_AGENT_SERIALIZE` (default `1`), `MICRO_AGENT_USE_GLOBAL_TRACE` (default `1`)
 
 Examples:
 ```bash
@@ -51,6 +53,14 @@ export OPENAI_MODEL=gpt-4o-mini
 export LLM_PROVIDER=ollama
 export OLLAMA_MODEL=llama3.2:1b
 export OLLAMA_HOST=http://localhost:11434
+
+# CORS (allow a specific origin and enable credentials)
+export MICRO_AGENT_CORS_ORIGINS="https://example.com"
+export MICRO_AGENT_CORS_CREDENTIALS=1
+
+# Concurrency/usage isolation
+export MICRO_AGENT_SERIALIZE=0  # allow concurrent requests
+export MICRO_AGENT_USE_GLOBAL_TRACE=0  # disable shared trace usage
 ```
 
 ## CLI
