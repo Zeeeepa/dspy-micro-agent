@@ -44,16 +44,40 @@ def dump_trace(trace_id: str, question: str, steps: List[Step], answer: str, *, 
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return path
 
-_JSON_RE = re.compile(r"\{.*\}", re.S)
-
 def extract_json_block(text: str) -> str:
     """
     Extract the first {...} block to survive models adding prose or code fences.
     """
-    m = _JSON_RE.search(text)
-    if not m:
-        raise ValueError(f"No JSON object found in: {text[:200]!r}")
-    return m.group(0)
+    if not text:
+        raise ValueError("No JSON object found in empty text")
+    start = None
+    depth = 0
+    in_str = False
+    escape = False
+    for i, ch in enumerate(text):
+        if start is None:
+            if ch == "{":
+                start = i
+                depth = 1
+            continue
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == "\"":
+                in_str = False
+            continue
+        if ch == "\"":
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    raise ValueError(f"No JSON object found in: {text[:200]!r}")
 
 def parse_decision_text(text: str) -> Dict[str, Any]:
     """Parse a model decision string into a dict.
@@ -73,6 +97,8 @@ def parse_decision_text(text: str) -> Dict[str, Any]:
     if json_repair is not None:
         try:
             repaired = json_repair.repair(block)
+            if isinstance(repaired, dict):
+                return repaired
             return json.loads(repaired)
         except Exception:
             pass

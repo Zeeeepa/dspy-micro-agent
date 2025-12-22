@@ -28,7 +28,7 @@ ALLOWED_OPS = {
 ALLOWED_CALLS = {"fact": lambda x: math.factorial(int(x))}
 def _eval_expr(node):
     # Python 3.10+: numeric literals appear as ast.Constant
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPS:
         lv, rv = _eval_expr(node.left), _eval_expr(node.right)
@@ -37,18 +37,31 @@ def _eval_expr(node):
         if isinstance(node.op, ast.Pow):
             if isinstance(rv, (int, float)) and abs(rv) > MAX_EXPONENT:
                 raise ValueError("exponent too large")
-        return ALLOWED_OPS[type(node.op)](lv, rv)
+        result = ALLOWED_OPS[type(node.op)](lv, rv)
+        if isinstance(result, complex):
+            raise ValueError("complex results are not supported")
+        return result
     if isinstance(node, ast.UnaryOp) and type(node.op) in ALLOWED_OPS:
         v = _eval_expr(node.operand)
         if isinstance(v, (int, float)) and abs(v) > MAX_ABS_NUMBER: raise ValueError("number too large")
-        return ALLOWED_OPS[type(node.op)](v)
+        result = ALLOWED_OPS[type(node.op)](v)
+        if isinstance(result, complex):
+            raise ValueError("complex results are not supported")
+        return result
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ALLOWED_CALLS:
         if len(node.args) != 1:
             raise ValueError("Invalid arguments")
         arg = _eval_expr(node.args[0])
-        if isinstance(arg, (int, float)) and arg > MAX_FACTORIAL_N:
+        if not isinstance(arg, (int, float)) or isinstance(arg, bool):
+            raise ValueError("factorial requires a number")
+        if isinstance(arg, float) and not arg.is_integer():
+            raise ValueError("factorial requires an integer")
+        arg_int = int(arg)
+        if arg_int < 0:
+            raise ValueError("factorial requires a non-negative integer")
+        if arg_int > MAX_FACTORIAL_N:
             raise ValueError("factorial too large")
-        return ALLOWED_CALLS[node.func.id](arg)
+        return ALLOWED_CALLS[node.func.id](arg_int)
     if isinstance(node, ast.Expression): return _eval_expr(node.body)
     raise ValueError("Disallowed expression")
 
@@ -68,7 +81,10 @@ def safe_eval_math(expr: str) -> float:
     # cap complexity
     if sum(1 for _ in ast.walk(tree)) > MAX_ALLOWED_OPS_NODES:
         raise ValueError("expression too complex")
-    return _eval_expr(tree)
+    result = _eval_expr(tree)
+    if isinstance(result, complex):
+        raise ValueError("complex results are not supported")
+    return result
 
 def tool_calculator(args: Dict[str, Any]):
     expr = str(args.get("expression", "")).strip()

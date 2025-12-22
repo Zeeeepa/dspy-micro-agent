@@ -19,11 +19,7 @@ class MicroAgent(dspy.Module):
         self.finalize = None  # fallback finalize handled via LM prompt
         self._tool_list = [t.spec() for t in TOOLS.values()]
         self.max_steps = max_steps
-        self._provider = None
-        try:
-            self._provider = (self.lm.model.split("/", 1)[0] if getattr(self.lm, "model", None) else None)
-        except Exception:
-            self._provider = None
+        self._provider = self._infer_provider(self.lm)
         # Determine function-calls mode
         env_override = os.getenv("USE_TOOL_CALLS")
         if isinstance(use_tool_calls, bool):
@@ -37,10 +33,36 @@ class MicroAgent(dspy.Module):
             try:
                 from dspy.adapters import JSONAdapter
                 dspy.settings.configure(adapter=JSONAdapter())
+                if to_dspy_tools():
+                    self.planner = dspy.Predict(PlanWithTools)
+                    self._load_compiled_demos()
+                else:
+                    self._use_tool_calls = False
             except Exception:
-                pass
-            self.planner = dspy.Predict(PlanWithTools)
-            self._load_compiled_demos()
+                self._use_tool_calls = False
+
+    def _infer_provider(self, lm) -> str | None:
+        try:
+            prov = getattr(lm, "provider", None) or getattr(lm, "_provider", None)
+            if isinstance(prov, str) and prov.strip():
+                return prov.strip().lower()
+        except Exception:
+            pass
+        try:
+            cls_name = lm.__class__.__name__.lower()
+            if "openai" in cls_name:
+                return "openai"
+            if "ollama" in cls_name:
+                return "ollama"
+        except Exception:
+            pass
+        try:
+            model = getattr(lm, "model", None)
+            if isinstance(model, str) and "/" in model:
+                return model.split("/", 1)[0].lower()
+        except Exception:
+            pass
+        return None
 
     def _load_compiled_demos(self):
         import json as _json
@@ -142,7 +164,9 @@ class MicroAgent(dspy.Module):
 
         def needs_time(q: str) -> bool:
             ql = q.lower()
-            return any(w in ql for w in ["time", "date", "utc", "current time", "now"])
+            if "current time" in ql or "current date" in ql:
+                return True
+            return re.search(r"\b(time|times|date|dates|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql) is not None
 
         def used_tool(state, name: str) -> bool:
             return any(step.get("tool") == name for step in state)
@@ -216,8 +240,19 @@ class MicroAgent(dspy.Module):
                 # If tool calls are proposed, execute them.
                 calls = getattr(pred, 'tool_calls', None)
                 executed_any = False
+                had_validation_error = False
+                had_policy_violation = False
                 if calls and getattr(calls, 'tool_calls', None):
-                    for call in calls.tool_calls:
+                    call_list = list(calls.tool_calls)
+                    if len(call_list) > 1:
+                        had_policy_violation = True
+                        state.append({
+                            "tool": "⛔️policy_violation",
+                            "args": {"reason": "multiple_tool_calls", "count": len(call_list)},
+                            "observation": "Model returned multiple tool calls in one step; executing only the first.",
+                        })
+                        call_list = call_list[:1]
+                    for call in call_list:
                         try:
                             name = getattr(call, 'name')
                             args = getattr(call, 'args') or {}
@@ -226,6 +261,7 @@ class MicroAgent(dspy.Module):
                         # Validate/execute; on validation error, record and continue planning
                         obs = run_tool(name, args)
                         if isinstance(obs, dict) and "error" in obs and "validation" in obs.get("error", ""):
+                            had_validation_error = True
                             state.append({
                                 "tool": "⛔️validation_error",
                                 "args": {"name": name, "args": args},
@@ -239,6 +275,8 @@ class MicroAgent(dspy.Module):
                 # Check finalization.
                 final = getattr(pred, 'final', None)
                 if final:
+                    if had_policy_violation or had_validation_error:
+                        continue
                     if must_math and not used_tool(state, "calculator"):
                         state.append({"tool": "⛔️policy_violation", "args": {}, "observation": "Finalize before calculator (OpenAI path)."})
                         # If tools were suggested and executed this step, iterate; else force tool suggestion by continuing.
@@ -399,6 +437,9 @@ class MicroAgent(dspy.Module):
                     "tool_calls": tool_calls,
                     "provider": self._provider,
                     "model": getattr(self.lm, "model", None),
+                    "cost": total_cost,
+                    "input_tokens": total_in_tokens,
+                    "output_tokens": total_out_tokens,
                 }
                 return p
 

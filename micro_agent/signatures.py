@@ -1,6 +1,13 @@
 from __future__ import annotations
 import dspy
-from dspy.adapters import Tool as DSpyTool, ToolCalls
+try:
+    from dspy.adapters import Tool as DSpyTool, ToolCalls
+except Exception:
+    try:
+        from dspy.adapters.types import Tool as DSpyTool, ToolCalls  # type: ignore
+    except Exception:
+        DSpyTool = object  # type: ignore
+        ToolCalls = object  # type: ignore
 
 class PlanOrAct(dspy.Signature):
     """Decide next step: either call a tool with JSON args or finalize.

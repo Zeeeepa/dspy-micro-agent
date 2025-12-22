@@ -43,7 +43,8 @@ def configure_lm():
                     cands = [c.strip() for c in cands if c.strip()]
                     expr = max(cands, key=len) if cands else "2+2"
                     return _json.dumps({"tool": {"name": "calculator", "args": {"expression": expr}}})
-                if any(w in ql for w in ["time","date","utc","current time","now"]):
+                if ("current time" in ql or "current date" in ql or
+                    re.search(r"\b(time|times|date|dates|utc|now|today|tomorrow|yesterday|timestamp|datetime)\b", ql)):
                     return _json.dumps({"tool": {"name": "now", "args": {"timezone": "utc"}}})
                 return _json.dumps({"final": {"answer": "ok"}})
         dspy.settings.configure(lm=_MockLM(), track_usage=True)
@@ -75,10 +76,14 @@ def configure_lm():
 
     # Option 2: OpenAI (default)
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    if _try("dspy.OpenAI", lambda: dspy.OpenAI(model=openai_model, temperature=temperature, max_tokens=max_tokens)):
-        return
-    if _try("dspy.LM(openai/<model>)", lambda: dspy.LM(f"openai/{openai_model}")):
-        return
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        if _try("dspy.OpenAI", lambda: dspy.OpenAI(model=openai_model, temperature=temperature, max_tokens=max_tokens)):
+            return
+        if _try("dspy.LM(openai/<model>)", lambda: dspy.LM(f"openai/{openai_model}")):
+            return
+    else:
+        tried.append(("openai", "missing OPENAI_API_KEY"))
 
     # If we got here, all backends failed: fall back to mock
     class _FallbackMockLM:
